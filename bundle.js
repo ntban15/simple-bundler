@@ -3,6 +3,7 @@ const path = require("path");
 const parser = require("@babel/parser");
 const traverse = require("@babel/traverse").default;
 const babel = require("@babel/core");
+const beautify = require("js-beautify").js;
 
 let globalId = 0;
 
@@ -95,6 +96,18 @@ function bundle(entryfile) {
   `;
 }
 
-console.log(
-  bundle(path.join(process.cwd(), "./example/dependency-cycle/index.js"))
+const entryfile = process.argv[2];
+
+if (!entryfile) {
+  throw Error("No entryfile provided");
+}
+
+const entryfilePath = path.join(process.cwd(), entryfile);
+const bundleContent = bundle(entryfilePath);
+const formattedBundleContent = beautify(bundleContent);
+
+fs.writeFileSync(
+  path.join(path.dirname(require.main.filename), "./build/bundle.js"),
+  formattedBundleContent,
+  { encoding: "utf-8" }
 );
