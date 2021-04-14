@@ -6,38 +6,52 @@ const babel = require("@babel/core");
 
 let globalId = 0;
 
-function parseModule(filename) {
-  const fileContent = fs.readFileSync(filename, { encoding: "utf-8" });
+function createModuleParser() {
+  const parsedModules = {};
 
-  const ast = parser.parse(fileContent, { sourceType: "module" });
+  function parse(filename) {
+    if (parsedModules[filename]) {
+      return parsedModules[filename];
+    }
 
-  const dependencies = [];
+    const fileContent = fs.readFileSync(filename, { encoding: "utf-8" });
 
-  traverse(ast, {
-    ImportDeclaration: function (path) {
-      const dependency = path.node.source.value;
-      dependencies.push(dependency);
-    },
-  });
+    const ast = parser.parse(fileContent, { sourceType: "module" });
 
-  const { code } = babel.transformSync(fileContent, {
-    presets: ["@babel/preset-env"],
-  });
+    const dependencies = [];
 
-  return {
-    id: globalId++,
-    filename,
-    dependencies,
-    code,
-  };
+    traverse(ast, {
+      ImportDeclaration: function (path) {
+        const dependency = path.node.source.value;
+        dependencies.push(dependency);
+      },
+    });
+
+    const { code } = babel.transformSync(fileContent, {
+      presets: ["@babel/preset-env"],
+    });
+
+    parsedModules[filename] = {
+      id: globalId++,
+      filename,
+      dependencies,
+      code,
+    };
+
+    return parsedModules[filename];
+  }
+
+  return parse;
 }
 
 function generateGraph(entryfile) {
+  const parseModule = createModuleParser();
+
   const mainModule = parseModule(entryfile);
 
-  const moduleQueue = [mainModule];
+  const modulesSet = new Set([mainModule]);
 
-  for (const module of moduleQueue) {
+  for (const module of modulesSet) {
     module.mapping = {};
     const moduleDir = path.dirname(module.filename);
 
@@ -47,11 +61,12 @@ function generateGraph(entryfile) {
 
       module.mapping[dependency] = dependencyModule.id;
 
-      moduleQueue.push(dependencyModule);
+      // parseModule is memoized so it is safe to add the result the Set without duplicated modules
+      modulesSet.add(dependencyModule);
     });
   }
 
-  return moduleQueue;
+  return modulesSet;
 }
 
 function bundle(entryfile) {
@@ -68,25 +83,18 @@ function bundle(entryfile) {
     ],`;
   });
 
+  const bundleCore = fs.readFileSync("./bundle-core.js", { encoding: "utf-8" });
+  const { code: transpiledBundleCore } = babel.transformSync(bundleCore, {
+    presets: ["@babel/preset-env"],
+  });
+
   return `
     (function(modules) {
-      function require(id) {
-        const [fn, mapping] = modules[id];
-
-        function scopedRequire(relativePath) {
-          return require(mapping[relativePath]);
-        }
-
-        const moduleObj = { exports: {} };
-
-        fn(scopedRequire, moduleObj, moduleObj.exports);
-
-        return moduleObj.exports;
-      }
-
-      require(0);
+      ${transpiledBundleCore}
     })({${modules}});
   `;
 }
 
-console.log(bundle(path.join(process.cwd(), "./example/index.js")));
+console.log(
+  bundle(path.join(process.cwd(), "./example/dependency-cycle/index.js"))
+);
